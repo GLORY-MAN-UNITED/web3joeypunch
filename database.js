@@ -52,6 +52,8 @@ function initDatabase() {
                 winning_answer_id INTEGER,
                 transfer_hash TEXT,
                 reward_transfer_hash TEXT,
+                ai_answer TEXT,
+                ai_answer_updated_at DATETIME,
                 FOREIGN KEY (user_id) REFERENCES users (id),
                 FOREIGN KEY (winning_answer_id) REFERENCES answers (id)
             )`, (err) => {
@@ -73,6 +75,16 @@ function initDatabase() {
                             console.error('Error adding reward_transfer_hash column:', alterErr);
                         } else if (!alterErr) {
                             console.log('Added reward_transfer_hash column to questions table');
+                        }
+                    });
+                    db.run(`ALTER TABLE questions ADD COLUMN ai_answer TEXT`, (alterErr) => {
+                        if (alterErr && !alterErr.message.includes('duplicate column name')) {
+                            console.error('Error adding ai_answer column:', alterErr);
+                        }
+                    });
+                    db.run(`ALTER TABLE questions ADD COLUMN ai_answer_updated_at DATETIME`, (alterErr) => {
+                        if (alterErr && !alterErr.message.includes('duplicate column name')) {
+                            console.error('Error adding ai_answer_updated_at column:', alterErr);
                         }
                     });
                 }

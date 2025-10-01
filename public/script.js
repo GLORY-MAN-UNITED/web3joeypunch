@@ -442,7 +442,7 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
     }
-    
+
     // Answer form handler
     const answerForm = document.getElementById('answerForm');
     if (answerForm) {
@@ -484,6 +484,122 @@ document.addEventListener('DOMContentLoaded', function() {
                 showMessage('Failed to post answer. Please try again.');
             }
         });
+    }
+
+    // JoeyPouch Oracle asynchronous loading
+    const aiAnswerCard = document.getElementById('ai-answer-card');
+    if (aiAnswerCard) {
+        const aiAnswerBody = aiAnswerCard.querySelector('.ai-answer-body');
+        const aiHeader = aiAnswerCard.querySelector('.ai-answer-header');
+        const questionId = aiAnswerCard.getAttribute('data-question-id');
+        const isReady = aiAnswerCard.getAttribute('data-ai-ready') === 'true';
+        const loadingMarkup = '<div class="ai-loading"><div class="ai-spinner"></div><span>Awaiting oracle insight...</span></div>';
+
+        if (!isReady && aiAnswerBody && aiHeader && questionId) {
+            aiAnswerBody.innerHTML = loadingMarkup;
+
+            const maxAttempts = 20;
+            const baseDelayMs = 2000;
+
+            const ensureToggleButton = (isLongAnswer) => {
+                let toggleButton = aiHeader.querySelector('.ai-toggle');
+                if (isLongAnswer) {
+                    if (!toggleButton) {
+                        toggleButton = document.createElement('button');
+                        toggleButton.className = 'ai-toggle';
+                        toggleButton.dataset.target = 'ai-answer-body';
+                        toggleButton.textContent = 'Expand Oracle Insight';
+                        aiHeader.appendChild(toggleButton);
+                    } else {
+                        toggleButton.style.display = '';
+                        toggleButton.textContent = 'Expand Oracle Insight';
+                    }
+                } else if (toggleButton) {
+                    toggleButton.remove();
+                }
+            };
+
+            const showAnswer = (result, isLongAnswer) => {
+                aiAnswerCard.dataset.aiReady = 'true';
+                aiAnswerCard.classList.remove('loading', 'error', 'expanded');
+                if (isLongAnswer) {
+                    aiAnswerCard.classList.add('collapsed');
+                } else {
+                    aiAnswerCard.classList.remove('collapsed');
+                }
+                aiAnswerBody.innerHTML = `<p>${result.answerHtml}</p>`;
+                ensureToggleButton(isLongAnswer);
+            };
+
+            const showError = (message) => {
+                aiAnswerCard.dataset.aiReady = 'false';
+                aiAnswerCard.classList.remove('loading', 'collapsed', 'expanded');
+                aiAnswerCard.classList.add('error');
+                aiAnswerBody.innerHTML = `<div class="ai-loading-error">${message}</div>`;
+                const toggleButton = aiHeader.querySelector('.ai-toggle');
+                if (toggleButton) {
+                    toggleButton.remove();
+                }
+            };
+
+            const pollAiAnswer = async (attempt = 0) => {
+                try {
+                    const response = await fetch(`/api/questions/${questionId}/ai-answer`);
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}`);
+                    }
+
+                    const result = await response.json();
+                    if (result.status === 'ready' && result.answerHtml) {
+                        const answerText = result.answer || '';
+                        const isLongAnswer = answerText.length > 600;
+                        showAnswer(result, isLongAnswer);
+                        return;
+                    }
+
+                    if (result.status === 'error') {
+                        showError(result.error || 'Oracle failed to respond.');
+                        return;
+                    }
+
+                    if (attempt + 1 >= maxAttempts) {
+                        showError('The oracle is taking longer than expected. Please refresh to try again.');
+                        return;
+                    }
+
+                    setTimeout(() => pollAiAnswer(attempt + 1), baseDelayMs);
+                } catch (error) {
+                    console.error('Failed to fetch AI answer:', error);
+                    if (attempt + 1 >= maxAttempts) {
+                        showError('The oracle is unavailable. Please try again later.');
+                        return;
+                    }
+                    setTimeout(() => pollAiAnswer(attempt + 1), baseDelayMs * 2);
+                }
+            };
+
+            pollAiAnswer();
+        }
+    }
+});
+
+document.addEventListener('click', (event) => {
+    const toggleButton = event.target.closest('.ai-toggle');
+    if (!toggleButton) {
+        return;
+    }
+    const card = toggleButton.closest('.ai-answer-card');
+    if (!card) {
+        return;
+    }
+    if (card.classList.contains('collapsed')) {
+        card.classList.remove('collapsed');
+        card.classList.add('expanded');
+        toggleButton.textContent = 'Collapse Oracle Insight';
+    } else {
+        card.classList.remove('expanded');
+        card.classList.add('collapsed');
+        toggleButton.textContent = 'Expand Oracle Insight';
     }
 });
 
