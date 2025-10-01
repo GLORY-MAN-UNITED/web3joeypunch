@@ -5,6 +5,7 @@ const path = require('path');
 const { db, initDatabase } = require('./database');
 const cors = require('cors');
 const app = express();
+const { getTokenBalance } = require('./balance');  // 引入区块链余额查询函数
 
 app.use(cors());
 
@@ -33,29 +34,30 @@ function requireAuth(req, res, next) {
 // Routes
 
 // Home page - show all questions
-app.get('/', (req, res) => {
-    // Prevent caching to ensure fresh data
+app.get('/', async (req, res) => {  // 增加 async 关键字
     res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
     res.set('Pragma', 'no-cache');
     res.set('Expires', '0');
     
     const query = `
-        SELECT q.*, u.username, u.tokens,
+        SELECT q.*, u.username, u.wallet_address, 
                (SELECT COUNT(*) FROM answers WHERE question_id = q.id) as answer_count
         FROM questions q 
         JOIN users u ON q.user_id = u.id 
         ORDER BY q.created_at DESC
     `;
     
-    db.all(query, [], (err, questions) => {
+    db.all(query, [], async (err, questions) => {  // 增加 async 关键字
         if (err) {
             console.error(err);
             return res.status(500).send('Database error');
         }
         
         if (req.session.userId) {
-            db.get('SELECT tokens, wallet_address FROM users WHERE id = ?', [req.session.userId], (err, user) => {
-                const userTokens = user ? user.tokens : 0;
+            // 从数据库查询用户的 wallet_address（不再查 tokens）
+            db.get('SELECT wallet_address FROM users WHERE id = ?', [req.session.userId], async (err, user) => {
+                // 调用区块链查询函数（传入钱包地址）
+                const userTokens = user?.wallet_address ? await getTokenBalance(user.wallet_address) : 0;
                 const walletAddress = user ? user.wallet_address : null;
                 const homePage = generateHomePage(questions, req.session.userId, req.session.username, userTokens, walletAddress);
                 res.send(homePage);
@@ -84,64 +86,73 @@ app.get('/register', (req, res) => {
 });
 
 // Profile page
-app.get('/profile', requireAuth, (req, res) => {
-    db.get('SELECT username, tokens, wallet_address, created_at FROM users WHERE id = ?', [req.session.userId], (err, user) => {
+app.get('/profile', requireAuth, async (req, res) => {  // 增加 async 关键字
+    // 从数据库查询 wallet_address（不再查 tokens）
+    db.get('SELECT username, wallet_address, created_at FROM users WHERE id = ?', [req.session.userId], async (err, user) => {
         if (err || !user) {
             return res.status(404).send('User not found');
         }
-        res.send(generateProfilePage(user));
+        // 调用区块链查询余额
+        const userTokens = user.wallet_address ? await getTokenBalance(user.wallet_address) : 0;
+        res.send(generateProfilePage({
+            ...user,
+            tokens: userTokens  // 用区块链余额替换数据库 tokens
+        }));
     });
 });
 
 // Ask question page
-app.get('/ask', requireAuth, (req, res) => {
-    db.get('SELECT tokens, wallet_address FROM users WHERE id = ?', [req.session.userId], (err, user) => {
-        const userTokens = user ? user.tokens : 0;
+app.get('/ask', requireAuth, async (req, res) => {  // 增加 async 关键字
+    // 从数据库查询 wallet_address（不再查 tokens）
+    db.get('SELECT wallet_address FROM users WHERE id = ?', [req.session.userId], async (err, user) => {
+        // 调用区块链查询余额
+        const userTokens = user?.wallet_address ? await getTokenBalance(user.wallet_address) : 0;
         const walletAddress = user ? user.wallet_address : null;
         res.send(generateAskPage(req.session.username, userTokens, walletAddress));
     });
 });
 
 // Question detail page
-app.get('/question/:id', (req, res) => {
-    // Prevent caching to ensure fresh data
+app.get('/question/:id', async (req, res) => {  // 增加 async 关键字
     res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
     res.set('Pragma', 'no-cache');
     res.set('Expires', '0');
     
     const questionId = req.params.id;
     
-    // Get question details
+    // 问题查询：只查 wallet_address，不查 tokens
     const questionQuery = `
-        SELECT q.*, u.username, u.tokens
+        SELECT q.*, u.username, u.wallet_address
         FROM questions q 
         JOIN users u ON q.user_id = u.id 
         WHERE q.id = ?
     `;
     
-    db.get(questionQuery, [questionId], (err, question) => {
+    db.get(questionQuery, [questionId], async (err, question) => {  // 增加 async
         if (err || !question) {
             return res.status(404).send('Question not found');
         }
         
-        // Get answers for this question
+        // 答案查询：只查 username，不查 tokens
         const answersQuery = `
-            SELECT a.*, u.username, u.tokens
+            SELECT a.*, u.username
             FROM answers a 
             JOIN users u ON a.user_id = u.id 
             WHERE a.question_id = ? 
             ORDER BY a.influence_points DESC, a.created_at ASC
         `;
         
-        db.all(answersQuery, [questionId], (err, answers) => {
+        db.all(answersQuery, [questionId], async (err, answers) => {  // 增加 async
             if (err) {
                 console.error(err);
                 return res.status(500).send('Database error');
             }
             
             if (req.session.userId) {
-                db.get('SELECT tokens, wallet_address FROM users WHERE id = ?', [req.session.userId], (err, user) => {
-                    const userTokens = user ? user.tokens : 0;
+                // 从数据库查询当前用户的 wallet_address
+                db.get('SELECT wallet_address FROM users WHERE id = ?', [req.session.userId], async (err, user) => {
+                    // 调用区块链查询余额
+                    const userTokens = user?.wallet_address ? await getTokenBalance(user.wallet_address) : 0;
                     const walletAddress = user ? user.wallet_address : null;
                     const questionPage = generateQuestionPage(question, answers, req.session.userId, req.session.username, userTokens, walletAddress);
                     res.send(questionPage);
