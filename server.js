@@ -3,8 +3,11 @@ const session = require('express-session');
 const bcrypt = require('bcryptjs');
 const path = require('path');
 const { db, initDatabase } = require('./database');
-
+const cors = require('cors');
 const app = express();
+
+app.use(cors());
+
 const PORT = process.env.PORT || 3000;
 
 // Middleware

@@ -364,6 +364,12 @@ input, textarea, select {
   transition: var(--transition);
 }
 
+/* 下拉菜单展开后的选项样式（补充这段） */
+select option {
+  background-color: var(--darker-bg); /* 更深的背景色 */
+  color: var(--text-primary); /* 白色文字 */
+}
+
 input:focus, textarea:focus, select:focus {
   outline: none;
   border-color: var(--primary);
