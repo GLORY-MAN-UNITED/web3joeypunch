@@ -187,10 +187,16 @@ document.addEventListener('DOMContentLoaded', function() {
                 const result = await response.json();
                 
                 if (result.success) {
-                    showMessage('Registration successful! Your wallet has been connected. Redirecting...', 'success');
+                    let message = result.message;
+                    if (result.mintTxHash) {
+                        message = 'Registration successful! 20 tokens have been minted to your wallet. Redirecting...';
+                    } else if (result.mintError) {
+                        message = 'Registration successful! However, token minting failed. Please contact support. Redirecting...';
+                    }
+                    showMessage(message, 'success');
                     setTimeout(() => {
                         window.location.href = '/';
-                    }, 1500);
+                    }, 2000);
                 } else {
                     showMessage(result.error);
                 }

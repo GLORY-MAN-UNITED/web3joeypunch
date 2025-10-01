@@ -7,6 +7,7 @@ const { db, initDatabase } = require('./database');
 const cors = require('cors');
 const app = express();
 const { getTokenBalance } = require('./balance');  // 引入区块链余额查询函数
+const { mintTokensToUser } = require('./mint');  // 引入代币铸造函数
 
 app.use(cors());
 
@@ -414,7 +415,7 @@ app.post('/api/register', async (req, res) => {
         const hashedPassword = await bcrypt.hash(password, 10);
         
         db.run('INSERT INTO users (username, password_hash, wallet_address) VALUES (?, ?, ?)',
-            [username, hashedPassword, walletAddress.toLowerCase()], function(err) {
+            [username, hashedPassword, walletAddress.toLowerCase()], async function(err) {
                 if (err) {
                     if (err.message.includes('UNIQUE constraint failed')) {
                         if (err.message.includes('username')) {
@@ -426,14 +427,32 @@ app.post('/api/register', async (req, res) => {
                     return res.status(500).json({ error: 'Registration failed' });
                 }
                 
-                req.session.userId = this.lastID;
+                const userId = this.lastID;
+                req.session.userId = userId;
                 req.session.username = username;
                 req.session.walletAddress = walletAddress.toLowerCase();
-                res.json({ 
-                    success: true, 
-                    message: 'Registration successful! Your wallet has been connected.',
-                    walletAddress: walletAddress.toLowerCase()
-                });
+                
+                // Mint 20 tokens to the new user's wallet
+                try {
+                    const txHash = await mintTokensToUser(walletAddress.toLowerCase(), 20);
+                    console.log(`Successfully minted 20 tokens to new user ${username} (${walletAddress.toLowerCase()}). TX: ${txHash}`);
+                    
+                    res.json({ 
+                        success: true, 
+                        message: 'Registration successful! 20 tokens have been minted to your wallet.',
+                        walletAddress: walletAddress.toLowerCase(),
+                        mintTxHash: txHash
+                    });
+                } catch (mintError) {
+                    console.error('Token minting failed for new user:', mintError);
+                    // Registration was successful, but minting failed
+                    res.json({ 
+                        success: true, 
+                        message: 'Registration successful! However, token minting failed. Please contact support.',
+                        walletAddress: walletAddress.toLowerCase(),
+                        mintError: 'Token minting failed'
+                    });
+                }
             });
     } catch (error) {
         console.error('Registration error:', error);
@@ -536,7 +555,7 @@ app.post('/api/user/wallet', requireAuth, (req, res) => {
 });
 
 // Ask a question
-app.post('/api/questions', requireAuth, (req, res) => {
+app.post('/api/questions', requireAuth, async (req, res) => {
     const { title, content, token_reward = 1, time_limit_minutes = 10 } = req.body;
     
     if (!title || !content) {
@@ -555,42 +574,46 @@ app.post('/api/questions', requireAuth, (req, res) => {
         return res.status(400).json({ error: 'Time limit must be between 1 and 10 minutes' });
     }
     
-    // Check if user has tokens
-    db.get('SELECT tokens FROM users WHERE id = ?', [req.session.userId], (err, user) => {
+    // Get user's wallet address and check blockchain token balance
+    db.get('SELECT wallet_address FROM users WHERE id = ?', [req.session.userId], async (err, user) => {
         if (err) {
             return res.status(500).json({ error: 'Database error' });
         }
         
-        if (!user || user.tokens < tokenReward) {
-            return res.status(400).json({ error: `Not enough tokens. You need ${tokenReward} tokens to post this question.` });
+        if (!user || !user.wallet_address) {
+            return res.status(400).json({ error: 'Wallet address not found. Please connect your wallet.' });
         }
         
-        // Calculate deadline
-        const deadline = new Date();
-        deadline.setMinutes(deadline.getMinutes() + timeLimit);
-        
-        // Deduct tokens and post question
-        db.run('UPDATE users SET tokens = tokens - ? WHERE id = ?', [tokenReward, req.session.userId], function(err) {
-            if (err) {
-                return res.status(500).json({ error: 'Failed to deduct tokens' });
+        try {
+            // Check blockchain token balance
+            const userTokens = await getTokenBalance(user.wallet_address);
+            
+            if (userTokens < tokenReward) {
+                return res.status(400).json({ error: `Not enough tokens. You have ${userTokens} tokens but need ${tokenReward} tokens to post this question.` });
             }
             
+            // Calculate deadline
+            const deadline = new Date();
+            deadline.setMinutes(deadline.getMinutes() + timeLimit);
+            
+            // Post question (token transfer will happen when question expires and reward is distributed)
             db.run(`INSERT INTO questions (title, content, user_id, token_reward, time_limit_minutes, deadline) 
                     VALUES (?, ?, ?, ?, ?, ?)`,
                 [title, content, req.session.userId, tokenReward, timeLimit, deadline.toISOString()], function(err) {
                     if (err) {
-                        // Rollback token deduction
-                        db.run('UPDATE users SET tokens = tokens + ? WHERE id = ?', [tokenReward, req.session.userId]);
                         return res.status(500).json({ error: 'Failed to post question' });
                     }
                     
                     res.json({ 
                         success: true, 
                         questionId: this.lastID,
-                        message: `Question posted with ${tokenReward} token reward! Time limit: ${timeLimit} minutes.`
+                        message: `Question posted with ${tokenReward} token reward! Time limit: ${timeLimit} minutes. Tokens will be transferred when the question expires.`
                     });
                 });
-        });
+        } catch (error) {
+            console.error('Error checking token balance:', error);
+            return res.status(500).json({ error: 'Failed to check token balance' });
+        }
     });
 });
 
@@ -613,74 +636,90 @@ app.post('/api/answers', requireAuth, (req, res) => {
 });
 
 // Endorse a question
-app.post('/api/endorse/question', requireAuth, (req, res) => {
+app.post('/api/endorse/question', requireAuth, async (req, res) => {
     const { questionId } = req.body;
     
     if (!questionId) {
         return res.status(400).json({ error: 'Question ID is required' });
     }
     
-    // Get user's token balance for weighted voting
-    db.get('SELECT tokens FROM users WHERE id = ?', [req.session.userId], (err, user) => {
-        if (err) {
-            return res.status(500).json({ error: 'Database error' });
+    try {
+        // Get user's wallet address
+        const user = await new Promise((resolve, reject) => {
+            db.get('SELECT wallet_address FROM users WHERE id = ?', [req.session.userId], (err, user) => {
+                if (err) reject(err);
+                else resolve(user);
+            });
+        });
+        
+        if (!user || !user.wallet_address) {
+            return res.status(404).json({ error: 'User not found or wallet not connected' });
         }
         
-        if (!user) {
-            return res.status(404).json({ error: 'User not found' });
-        }
+        // Get user's blockchain token balance for weighted voting
+        const userTokens = await getTokenBalance(user.wallet_address);
         
         // Check if user already endorsed this question
-        db.get('SELECT id FROM endorsements WHERE user_id = ? AND target_type = ? AND target_id = ?', 
-            [req.session.userId, 'question', questionId], (err, existingEndorsement) => {
-                if (err) {
-                    return res.status(500).json({ error: 'Database error' });
-                }
-                
-                if (existingEndorsement) {
-                    return res.status(400).json({ error: 'You have already endorsed this question' });
-                }
-                
-                // Calculate influence value based on user's token balance
-                const influenceValue = Math.round((user.tokens / 10) * 10) / 10; // Round to 1 decimal place
-                
-                // Add endorsement (no token cost)
-                db.run('INSERT INTO endorsements (user_id, target_type, target_id, influence_value) VALUES (?, ?, ?, ?)',
-                    [req.session.userId, 'question', questionId, influenceValue], function(err) {
-                        if (err) {
-                            console.error('Error inserting endorsement:', err);
-                            return res.status(500).json({ error: 'Failed to endorse' });
-                        }
-                        
-                        // Update question influence points
-                        db.run('UPDATE questions SET influence_points = influence_points + ? WHERE id = ?',
-                            [influenceValue, questionId], (err) => {
-                                if (err) {
-                                    console.error('Error updating question influence points:', err);
-                                }
-                                res.json({ 
-                                    success: true, 
-                                    message: 'Endorsement recorded successfully!'
-                                });
-                            });
-                    });
-            });
-    });
+        const existingEndorsement = await new Promise((resolve, reject) => {
+            db.get('SELECT id FROM endorsements WHERE user_id = ? AND target_type = ? AND target_id = ?', 
+                [req.session.userId, 'question', questionId], (err, endorsement) => {
+                    if (err) reject(err);
+                    else resolve(endorsement);
+                });
+        });
+        
+        if (existingEndorsement) {
+            return res.status(400).json({ error: 'You have already endorsed this question' });
+        }
+        
+        // Calculate influence value based on user's token balance
+        const influenceValue = Math.round((userTokens / 10) * 10) / 10; // Round to 1 decimal place
+        
+        // Add endorsement (no token cost)
+        await new Promise((resolve, reject) => {
+            db.run('INSERT INTO endorsements (user_id, target_type, target_id, influence_value) VALUES (?, ?, ?, ?)',
+                [req.session.userId, 'question', questionId, influenceValue], function(err) {
+                    if (err) reject(err);
+                    else resolve();
+                });
+        });
+        
+        // Update question influence points
+        await new Promise((resolve, reject) => {
+            db.run('UPDATE questions SET influence_points = influence_points + ? WHERE id = ?',
+                [influenceValue, questionId], (err) => {
+                    if (err) reject(err);
+                    else resolve();
+                });
+        });
+        
+        res.json({ 
+            success: true, 
+            message: 'Endorsement recorded successfully!'
+        });
+        
+    } catch (error) {
+        console.error('Error endorsing question:', error);
+        return res.status(500).json({ error: 'Failed to endorse question' });
+    }
 });
 
 // Endorse an answer
-app.post('/api/endorse/answer', requireAuth, (req, res) => {
+app.post('/api/endorse/answer', requireAuth, async (req, res) => {
     const { answerId } = req.body;
     
     if (!answerId) {
         return res.status(400).json({ error: 'Answer ID is required' });
     }
     
-    // Check if user is trying to endorse their own answer
-    db.get('SELECT user_id FROM answers WHERE id = ?', [answerId], (err, answer) => {
-        if (err) {
-            return res.status(500).json({ error: 'Database error' });
-        }
+    try {
+        // Check if user is trying to endorse their own answer
+        const answer = await new Promise((resolve, reject) => {
+            db.get('SELECT user_id FROM answers WHERE id = ?', [answerId], (err, answer) => {
+                if (err) reject(err);
+                else resolve(answer);
+            });
+        });
         
         if (!answer) {
             return res.status(404).json({ error: 'Answer not found' });
@@ -690,53 +729,64 @@ app.post('/api/endorse/answer', requireAuth, (req, res) => {
             return res.status(400).json({ error: 'You cannot endorse your own answer' });
         }
         
-        // Get user's token balance for weighted voting
-        db.get('SELECT tokens FROM users WHERE id = ?', [req.session.userId], (err, user) => {
-            if (err) {
-                return res.status(500).json({ error: 'Database error' });
-            }
-            
-            if (!user) {
-                return res.status(404).json({ error: 'User not found' });
-            }
-            
-            // Check if user already endorsed this answer
+        // Get user's wallet address
+        const user = await new Promise((resolve, reject) => {
+            db.get('SELECT wallet_address FROM users WHERE id = ?', [req.session.userId], (err, user) => {
+                if (err) reject(err);
+                else resolve(user);
+            });
+        });
+        
+        if (!user || !user.wallet_address) {
+            return res.status(404).json({ error: 'User not found or wallet not connected' });
+        }
+        
+        // Get user's blockchain token balance for weighted voting
+        const userTokens = await getTokenBalance(user.wallet_address);
+        
+        // Check if user already endorsed this answer
+        const existingEndorsement = await new Promise((resolve, reject) => {
             db.get('SELECT id FROM endorsements WHERE user_id = ? AND target_type = ? AND target_id = ?', 
-                [req.session.userId, 'answer', answerId], (err, existingEndorsement) => {
-                    if (err) {
-                        return res.status(500).json({ error: 'Database error' });
-                    }
-                    
-                    if (existingEndorsement) {
-                        return res.status(400).json({ error: 'You have already endorsed this answer' });
-                    }
-                    
-                    // Calculate influence value based on user's token balance
-                    const influenceValue = Math.round((user.tokens / 10) * 10) / 10; // Round to 1 decimal place
-                    
-                    // Add endorsement (no token cost)
-                    db.run('INSERT INTO endorsements (user_id, target_type, target_id, influence_value) VALUES (?, ?, ?, ?)',
-                        [req.session.userId, 'answer', answerId, influenceValue], function(err) {
-                            if (err) {
-                                console.error('Error inserting answer endorsement:', err);
-                                return res.status(500).json({ error: 'Failed to endorse' });
-                            }
-                            
-                            // Update answer influence points
-                            db.run('UPDATE answers SET influence_points = influence_points + ? WHERE id = ?',
-                                [influenceValue, answerId], (err) => {
-                                    if (err) {
-                                        console.error('Error updating answer influence points:', err);
-                                    }
-                                    res.json({ 
-                                        success: true, 
-                                        message: 'Endorsement recorded successfully!'
-                                    });
-                                });
-                        });
+                [req.session.userId, 'answer', answerId], (err, endorsement) => {
+                    if (err) reject(err);
+                    else resolve(endorsement);
                 });
         });
-    });
+        
+        if (existingEndorsement) {
+            return res.status(400).json({ error: 'You have already endorsed this answer' });
+        }
+        
+        // Calculate influence value based on user's token balance
+        const influenceValue = Math.round((userTokens / 10) * 10) / 10; // Round to 1 decimal place
+        
+        // Add endorsement (no token cost)
+        await new Promise((resolve, reject) => {
+            db.run('INSERT INTO endorsements (user_id, target_type, target_id, influence_value) VALUES (?, ?, ?, ?)',
+                [req.session.userId, 'answer', answerId, influenceValue], function(err) {
+                    if (err) reject(err);
+                    else resolve();
+                });
+        });
+        
+        // Update answer influence points
+        await new Promise((resolve, reject) => {
+            db.run('UPDATE answers SET influence_points = influence_points + ? WHERE id = ?',
+                [influenceValue, answerId], (err) => {
+                    if (err) reject(err);
+                    else resolve();
+                });
+        });
+        
+        res.json({ 
+            success: true, 
+            message: 'Endorsement recorded successfully!'
+        });
+        
+    } catch (error) {
+        console.error('Error endorsing answer:', error);
+        return res.status(500).json({ error: 'Failed to endorse answer' });
+    }
 });
 
 // HTML Template Functions
