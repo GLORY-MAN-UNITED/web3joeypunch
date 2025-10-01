@@ -1,0 +1,676 @@
+/* 基础变量定义 - 采用Token2049风格的深紫色与青色配色 */
+:root {
+  --primary: #6C5CE7; /* 主色调：深紫色，体现科技感 */
+  --primary-light: rgba(108, 92, 231, 0.2);
+  --primary-dark: #5a49d1;
+  --secondary: #00F5D4; /* 辅助色：亮青色，用于强调和交互元素 */
+  --secondary-light: rgba(0, 245, 212, 0.1);
+  --dark-bg: #0F1123; /* 深色背景 */
+  --darker-bg: #090B1A; /* 更深色背景，用于卡片和区块 */
+  --card-bg: rgba(17, 20, 43, 0.8); /* 卡片背景，带透明度 */
+  --text-primary: #FFFFFF; /* 主要文本 */
+  --text-secondary: #B2BEC3; /* 次要文本 */
+  --border: rgba(255, 255, 255, 0.08); /* 边框颜色 */
+  --border-hover: rgba(108, 92, 231, 0.3); /* 悬停时的边框颜色 */
+  --shadow: 0 10px 30px rgba(0, 0, 0, 0.2); /* 基础阴影 */
+  --shadow-hover: 0 15px 35px rgba(0, 0, 0, 0.3); /* 悬停时的阴影 */
+  --border-radius: 8px; /* 统一圆角 */
+  --transition: all 0.3s ease; /* 统一过渡效果 */
+}
+
+/* 全局样式重置与基础设置 */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  background-color: var(--dark-bg);
+  color: var(--text-primary);
+  font-family: 'Inter', sans-serif;
+  line-height: 1.6;
+  /* 背景装饰 - 增加深度感 */
+  background-image: 
+    radial-gradient(circle at 25% 25%, rgba(108, 92, 231, 0.1) 0%, transparent 40%),
+    radial-gradient(circle at 75% 75%, rgba(0, 245, 212, 0.1) 0%, transparent 40%);
+  background-attachment: fixed;
+  min-height: 100vh;
+}
+
+/* 容器样式 */
+.container {
+  width: 100%;
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 2rem;
+}
+
+/* 导航栏样式 */
+.header {
+  background-color: var(--darker-bg);
+  border-bottom: 1px solid var(--border);
+  backdrop-filter: blur(10px);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.nav {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem 0;
+}
+
+.logo {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  text-decoration: none;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.logo span {
+  color: var(--secondary);
+}
+
+.nav-links {
+  display: flex;
+  align-items: center;
+  gap: 2rem;
+}
+
+.nav-links a {
+  color: var(--text-secondary);
+  text-decoration: none;
+  font-weight: 500;
+  transition: var(--transition);
+  position: relative;
+}
+
+.nav-links a:hover {
+  color: var(--secondary);
+}
+
+.nav-links a::after {
+  content: '';
+  position: absolute;
+  bottom: -4px;
+  left: 0;
+  width: 0;
+  height: 2px;
+  background-color: var(--secondary);
+  transition: var(--transition);
+}
+
+.nav-links a:hover::after {
+  width: 100%;
+}
+
+.user-info {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+/* 按钮样式 */
+.btn {
+  background-color: var(--primary);
+  color: white;
+  border: none;
+  padding: 0.8rem 1.5rem;
+  border-radius: var(--border-radius);
+  cursor: pointer;
+  font-weight: 600;
+  transition: var(--transition);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  text-decoration: none;
+}
+
+.btn:hover {
+  background-color: var(--primary-dark);
+  transform: translateY(-2px);
+  box-shadow: 0 5px 15px rgba(108, 92, 231, 0.3);
+}
+
+.btn-secondary {
+  background-color: transparent;
+  border: 1px solid var(--primary);
+  color: var(--primary);
+}
+
+.btn-secondary:hover {
+  background-color: var(--primary-light);
+  color: var(--text-primary);
+}
+
+.btn-vote {
+  background-color: var(--secondary-light);
+  color: var(--secondary);
+  padding: 0.5rem 1rem;
+  font-size: 0.9rem;
+  margin-top: 0.5rem;
+}
+
+.btn-vote:hover {
+  background-color: rgba(0, 245, 212, 0.2);
+  transform: translateY(-2px);
+}
+
+/* 卡片组件样式 */
+.card {
+  background-color: var(--card-bg);
+  border-radius: var(--border-radius);
+  padding: 1.5rem;
+  margin-bottom: 1.5rem;
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  transition: var(--transition);
+  opacity: 0; /* 初始为透明，用于动画 */
+}
+
+.card:hover {
+  transform: translateY(-5px);
+  box-shadow: var(--shadow-hover);
+  border-color: var(--border-hover);
+}
+
+/* 页面头部样式 */
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin: 2rem 0;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.page-header h1 {
+  font-size: 2rem;
+  background: linear-gradient(90deg, var(--text-primary), var(--text-secondary));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* 问题列表样式 */
+.questions-list {
+  display: grid;
+  gap: 1.5rem;
+  margin: 2rem 0;
+}
+
+.question-item {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 1.5rem;
+  background-color: var(--card-bg);
+  border-radius: var(--border-radius);
+  border: 1px solid var(--border);
+  transition: var(--transition);
+}
+
+.question-item:hover {
+  transform: translateY(-3px);
+  border-color: var(--border-hover);
+  box-shadow: var(--shadow);
+}
+
+.question-item.expired {
+  opacity: 0.8;
+}
+
+.question-stats {
+  display: flex;
+  gap: 1.5rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.stat .number {
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: var(--secondary);
+}
+
+.stat .label {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.stat.token-reward .number {
+  color: #FFD700;
+}
+
+.question-content h3 {
+  margin-bottom: 0.5rem;
+}
+
+.question-content h3 a {
+  color: var(--text-primary);
+  text-decoration: none;
+  transition: var(--transition);
+}
+
+.question-content h3 a:hover {
+  color: var(--secondary);
+}
+
+.question-excerpt {
+  color: var(--text-secondary);
+  margin-bottom: 1rem;
+  line-height: 1.5;
+}
+
+.question-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.author {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.time-status {
+  padding: 0.2rem 0.5rem;
+  border-radius: 12px;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.time-status.active {
+  background-color: rgba(0, 245, 212, 0.1);
+  color: var(--secondary);
+}
+
+.time-status.expired {
+  background-color: rgba(245, 0, 87, 0.1);
+  color: #F50057;
+}
+
+/* 认证表单样式 */
+.auth-container {
+  max-width: 400px;
+  margin: 4rem auto;
+  padding: 2rem;
+  background-color: var(--card-bg);
+  border-radius: var(--border-radius);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+}
+
+.auth-container h2 {
+  margin-bottom: 1.5rem;
+  text-align: center;
+  color: var(--text-primary);
+}
+
+.auth-form, .ask-form, .answer-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.form-group label {
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.form-row {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.form-row .form-group {
+  flex: 1;
+  min-width: 200px;
+}
+
+input, textarea, select {
+  width: 100%;
+  padding: 1rem;
+  background-color: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border);
+  border-radius: var(--border-radius);
+  color: var(--text-primary);
+  font-size: 1rem;
+  font-family: inherit;
+  transition: var(--transition);
+}
+
+input:focus, textarea:focus, select:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-light);
+}
+
+textarea {
+  resize: vertical;
+  min-height: 100px;
+}
+
+.auth-form button, .ask-form button, .answer-form button {
+  margin-top: 1rem;
+  width: 100%;
+}
+
+.auth-container p {
+  margin-top: 1.5rem;
+  text-align: center;
+  color: var(--text-secondary);
+}
+
+.auth-container p a {
+  color: var(--secondary);
+  text-decoration: none;
+}
+
+.auth-container p a:hover {
+  text-decoration: underline;
+}
+
+/* 提问页面样式 */
+.ask-container {
+  max-width: 800px;
+  margin: 2rem auto;
+}
+
+.ask-container h2 {
+  margin-bottom: 1.5rem;
+  color: var(--text-primary);
+}
+
+.token-info {
+  background-color: var(--secondary-light);
+  color: var(--secondary);
+  padding: 1rem;
+  border-radius: var(--border-radius);
+  margin-bottom: 1.5rem;
+  font-weight: 500;
+}
+
+.reward-info {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  margin: 1rem 0;
+  padding: 0.8rem;
+  background-color: rgba(255, 255, 255, 0.05);
+  border-radius: var(--border-radius);
+}
+
+/* 问题详情页样式 */
+.question-detail {
+  margin: 2rem 0;
+  background-color: var(--card-bg);
+  border-radius: var(--border-radius);
+  border: 1px solid var(--border);
+  padding: 2rem;
+  box-shadow: var(--shadow);
+}
+
+.question-header h1 {
+  font-size: 1.8rem;
+  margin-bottom: 1rem;
+  color: var(--text-primary);
+}
+
+.question-reward-info {
+  margin: 1.5rem 0;
+  padding: 1.5rem;
+  background-color: rgba(255, 255, 255, 0.03);
+  border-radius: var(--border-radius);
+  border-left: 3px solid var(--secondary);
+}
+
+.reward-box {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.reward-amount {
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: #FFD700;
+}
+
+.reward-note {
+  margin-top: 1rem;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+.question-body {
+  display: flex;
+  gap: 2rem;
+  margin-top: 1.5rem;
+}
+
+.question-votes {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 80px;
+}
+
+.vote-count {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--secondary);
+}
+
+.vote-label {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  text-align: center;
+}
+
+.question-content {
+  flex: 1;
+  line-height: 1.8;
+}
+
+.question-content p {
+  margin-bottom: 1rem;
+  color: var(--text-primary);
+}
+
+/* 回答区域样式 */
+.answers-section {
+  margin: 2rem 0;
+}
+
+.answers-section h3 {
+  margin-bottom: 1.5rem;
+  font-size: 1.5rem;
+  color: var(--text-primary);
+}
+
+.answers-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.answer {
+  display: flex;
+  gap: 1.5rem;
+  background-color: var(--card-bg);
+  border-radius: var(--border-radius);
+  border: 1px solid var(--border);
+  padding: 1.5rem;
+  transition: var(--transition);
+}
+
+.answer:hover {
+  border-color: var(--border-hover);
+  transform: translateY(-3px);
+  box-shadow: var(--shadow);
+}
+
+.answer-votes {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 80px;
+}
+
+.answer-content {
+  flex: 1;
+}
+
+.answer-content p {
+  margin-bottom: 1rem;
+  line-height: 1.8;
+}
+
+.answer-meta {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  display: flex;
+  gap: 1rem;
+}
+
+.winner-badge {
+  margin-top: 0.5rem;
+  background-color: rgba(255, 215, 0, 0.1);
+  color: #FFD700;
+  padding: 0.2rem 0.5rem;
+  border-radius: 12px;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.winning-answer {
+  border: 1px solid rgba(255, 215, 0, 0.3);
+  position: relative;
+}
+
+.winning-answer::before {
+  content: 'WINNING ANSWER';
+  position: absolute;
+  top: -10px;
+  left: 20px;
+  background-color: #FFD700;
+  color: #000;
+  padding: 0.2rem 0.8rem;
+  border-radius: 12px;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+/* 回答表单样式 */
+.answer-form-container {
+  margin: 2rem 0;
+  padding: 1.5rem;
+  background-color: var(--card-bg);
+  border-radius: var(--border-radius);
+  border: 1px solid var(--border);
+}
+
+.answer-form-container h3 {
+  margin-bottom: 1rem;
+  color: var(--text-primary);
+}
+
+.expired-notice {
+  margin: 2rem 0;
+  padding: 1.5rem;
+  background-color: rgba(245, 0, 87, 0.1);
+  border-radius: var(--border-radius);
+  color: #F50057;
+  text-align: center;
+}
+
+/* 动画效果 */
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.fade-in-up {
+  animation: fadeInUp 0.5s ease forwards;
+}
+
+/* 延迟动画序列 */
+.delay-100 { animation-delay: 0.1s; }
+.delay-200 { animation-delay: 0.2s; }
+.delay-300 { animation-delay: 0.3s; }
+.delay-400 { animation-delay: 0.4s; }
+.delay-500 { animation-delay: 0.5s; }
+
+/* 响应式调整 */
+@media (max-width: 768px) {
+  .nav {
+    flex-direction: column;
+    gap: 1rem;
+    padding: 1rem 0;
+  }
+  
+  .nav-links {
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 1rem;
+  }
+  
+  .question-body, .answer {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  
+  .question-votes, .answer-votes {
+    flex-direction: row;
+    gap: 1rem;
+    margin-bottom: 1rem;
+  }
+  
+  .form-row {
+    flex-direction: column;
+    gap: 1rem;
+  }
+  
+  .question-stats {
+    flex-wrap: wrap;
+  }
+  
+  .page-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
