@@ -4,4 +4,4 @@ node_modules/
 node_modules/
 chunk_rag/api.txt
 chunk_rag/.env
-# chunk_rag/data/
+chunk_rag/data/
