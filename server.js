@@ -331,7 +331,7 @@ app.post('/api/user/wallet', requireAuth, (req, res) => {
 
 // Ask a question
 app.post('/api/questions', requireAuth, async (req, res) => {
-    const { title, content, token_reward = 1, time_limit_minutes = 10 } = req.body;
+    const { title, content, token_reward = 1, time_limit_minutes = 10, transferHash } = req.body;
     
     if (!title || !content) {
         return res.status(400).json({ error: 'Title and content are required' });
@@ -349,7 +349,12 @@ app.post('/api/questions', requireAuth, async (req, res) => {
         return res.status(400).json({ error: 'Time limit must be between 1 and 10 minutes' });
     }
     
-    // Get user's wallet address and check blockchain token balance
+    // Require transfer hash as proof of token transfer
+    if (!transferHash) {
+        return res.status(400).json({ error: 'Token transfer hash is required. Please authorize the token transfer first.' });
+    }
+    
+    // Get user's wallet address
     db.get('SELECT wallet_address FROM users WHERE id = ?', [req.session.userId], async (err, user) => {
         if (err) {
             return res.status(500).json({ error: 'Database error' });
@@ -360,21 +365,14 @@ app.post('/api/questions', requireAuth, async (req, res) => {
         }
         
         try {
-            // Check blockchain token balance
-            const userTokens = await getTokenBalance(user.wallet_address);
-            
-            if (userTokens < tokenReward) {
-                return res.status(400).json({ error: `Not enough tokens. You have ${userTokens} tokens but need ${tokenReward} tokens to post this question.` });
-            }
-            
             // Calculate deadline
             const deadline = new Date();
             deadline.setMinutes(deadline.getMinutes() + timeLimit);
             
-            // Post question (token transfer will happen when question expires and reward is distributed)
-            db.run(`INSERT INTO questions (title, content, user_id, token_reward, time_limit_minutes, deadline) 
-                    VALUES (?, ?, ?, ?, ?, ?)`,
-                [title, content, req.session.userId, tokenReward, timeLimit, deadline.toISOString()], function(err) {
+            // Post question with transfer hash for verification
+            db.run(`INSERT INTO questions (title, content, user_id, token_reward, time_limit_minutes, deadline, transfer_hash) 
+                    VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                [title, content, req.session.userId, tokenReward, timeLimit, deadline.toISOString(), transferHash], function(err) {
                     if (err) {
                         return res.status(500).json({ error: 'Failed to post question' });
                     }
@@ -382,12 +380,12 @@ app.post('/api/questions', requireAuth, async (req, res) => {
                     res.json({ 
                         success: true, 
                         questionId: this.lastID,
-                        message: `Question posted with ${tokenReward} token reward! Time limit: ${timeLimit} minutes. Tokens will be transferred when the question expires.`
+                        message: `Question posted successfully! ${tokenReward} tokens transferred to escrow. Time limit: ${timeLimit} minutes.`
                     });
                 });
         } catch (error) {
-            console.error('Error checking token balance:', error);
-            return res.status(500).json({ error: 'Failed to check token balance' });
+            console.error('Error posting question:', error);
+            return res.status(500).json({ error: 'Failed to post question' });
         }
     });
 });
@@ -565,7 +563,7 @@ app.post('/api/endorse/answer', requireAuth, async (req, res) => {
 });
 
 // HTML Template Functions
-function generateBasePage(title, content, username = null, userTokens = 0, walletAddress = null) {
+function generateBasePage(title, content, username = null, userTokens = 0, walletAddress = null, extraScripts = '') {
     const walletInfo = walletAddress ? 
         `<div class="nav-wallet-info">
             <span>🦊</span>
@@ -589,6 +587,7 @@ function generateBasePage(title, content, username = null, userTokens = 0, walle
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>${title} - Joey Pouch</title>
     <link rel="stylesheet" href="/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/ethers@6.8.0/dist/ethers.umd.min.js"></script>
 </head>
 <body>
     <header class="header">
@@ -601,6 +600,7 @@ function generateBasePage(title, content, username = null, userTokens = 0, walle
     </header>
     <main class="container">${content}</main>
     <script src="/script.js"></script>
+    ${extraScripts}
 </body>
 </html>`;
 }
@@ -759,7 +759,7 @@ function generateAskPage(username, userTokens = 0, walletAddress = null) {
                         </select>
                     </div>
                 </div>
-                <p class="reward-info">💡 The user with the highest-endorsed answer will receive all tokens when time expires!</p>
+                <p class="reward-info">🏆 <strong>Winner takes all:</strong> Only the user with the highest-endorsed answer will receive ALL tokens when time expires! If there's a tie in endorsements, the earliest answer wins.</p>
                 <button type="submit" class="btn btn-primary" id="postQuestionBtn">
                     Post Question
                 </button>
@@ -767,7 +767,8 @@ function generateAskPage(username, userTokens = 0, walletAddress = null) {
         </div>
     `;
 
-    return generateBasePage('Ask Question', content, username, userTokens, walletAddress);
+    const extraScripts = '<script src="/tokenAuth.js"></script>';
+    return generateBasePage('Ask Question', content, username, userTokens, walletAddress, extraScripts);
 }
 
 function generateQuestionPage(question, answers, userId, username, userTokens = 0, walletAddress = null) {
@@ -921,59 +922,79 @@ function generateProfilePage(user) {
 }
 
 // Function to check and distribute rewards for expired questions
-function checkExpiredQuestions() {
+async function checkExpiredQuestions() {
     const now = new Date().toISOString();
     
     db.all(`
         SELECT id, token_reward, user_id 
         FROM questions 
         WHERE deadline <= ? AND reward_distributed = 0
-    `, [now], (err, expiredQuestions) => {
+    `, [now], async (err, expiredQuestions) => {
         if (err) {
             console.error('Error checking expired questions:', err);
             return;
         }
         
-        expiredQuestions.forEach(question => {
-            // Find the answer with highest influence points for this question
-            db.get(`
-                SELECT a.id, a.user_id, a.influence_points, u.username
-                FROM answers a
-                JOIN users u ON a.user_id = u.id
-                WHERE a.question_id = ?
-                ORDER BY a.influence_points DESC, a.created_at ASC
-                LIMIT 1
-            `, [question.id], (err, winningAnswer) => {
-                if (err) {
-                    console.error('Error finding winning answer:', err);
-                    return;
-                }
+        for (const question of expiredQuestions) {
+            try {
+                // Find the answer with highest influence points for this question
+                const winningAnswer = await new Promise((resolve, reject) => {
+                    db.get(`
+                        SELECT a.id, a.user_id, a.influence_points, u.username, u.wallet_address
+                        FROM answers a
+                        JOIN users u ON a.user_id = u.id
+                        WHERE a.question_id = ?
+                        ORDER BY a.influence_points DESC, a.created_at ASC
+                        LIMIT 1
+                    `, [question.id], (err, result) => {
+                        if (err) reject(err);
+                        else resolve(result);
+                    });
+                });
                 
-                if (winningAnswer) {
-                    // Award tokens to the winning answer's author
-                    db.run(`
-                        UPDATE users 
-                        SET tokens = tokens + ? 
-                        WHERE id = ?
-                    `, [question.token_reward, winningAnswer.user_id], (err) => {
-                        if (err) {
-                            console.error('Error awarding tokens:', err);
-                            return;
-                        }
-                        
+                if (winningAnswer && winningAnswer.wallet_address) {
+                    // Import the server reward transfer function
+                    const { transferRewardToWinner } = require('./serverReward.js');
+                    
+                    // Transfer tokens from server to winner using blockchain
+                    console.log(`🏆 Found winning answer for question ${question.id}:`);
+                    console.log(`   Winner: ${winningAnswer.username} (User ID: ${winningAnswer.user_id})`);
+                    console.log(`   Influence Points: ${winningAnswer.influence_points}`);
+                    console.log(`   Wallet Address: ${winningAnswer.wallet_address}`);
+                    console.log(`   Reward: ${question.token_reward} tokens`);
+                    console.log(`Transferring ${question.token_reward} tokens to winner...`);
+                    
+                    const transferResult = await transferRewardToWinner(
+                        winningAnswer.wallet_address, 
+                        question.token_reward
+                    );
+                    
+                    if (transferResult.success) {
                         // Mark question as reward distributed and record winning answer
                         db.run(`
                             UPDATE questions 
-                            SET reward_distributed = 1, winning_answer_id = ? 
+                            SET reward_distributed = 1, winning_answer_id = ?, reward_transfer_hash = ?
                             WHERE id = ?
-                        `, [winningAnswer.id, question.id], (err) => {
+                        `, [winningAnswer.id, transferResult.txHash, question.id], (err) => {
                             if (err) {
                                 console.error('Error updating question reward status:', err);
                             } else {
-                                console.log(`Awarded ${question.token_reward} tokens to user ${winningAnswer.user_id} for winning answer to question ${question.id}`);
+                                console.log(`✅ Successfully awarded ${question.token_reward} tokens to ${winningAnswer.username} (${winningAnswer.wallet_address}) for winning answer to question ${question.id}`);
+                                console.log(`Transaction hash: ${transferResult.txHash}`);
                             }
                         });
-                    });
+                    } else {
+                        console.error(`❌ Failed to transfer reward for question ${question.id}:`, transferResult.error);
+                        // Don't mark as distributed so it will be retried next time
+                    }
+                } else if (winningAnswer && !winningAnswer.wallet_address) {
+                    console.log(`⚠️ Winning answer user for question ${question.id} has no wallet address - cannot transfer reward`);
+                    // Mark as distributed to avoid retrying
+                    db.run(`
+                        UPDATE questions 
+                        SET reward_distributed = 1, winning_answer_id = ?
+                        WHERE id = ?
+                    `, [winningAnswer.id, question.id]);
                 } else {
                     // No answers - mark as expired without reward
                     db.run(`
@@ -988,8 +1009,10 @@ function checkExpiredQuestions() {
                         }
                     });
                 }
-            });
-        });
+            } catch (error) {
+                console.error(`Error processing expired question ${question.id}:`, error);
+            }
+        }
     });
 }
 

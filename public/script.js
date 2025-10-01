@@ -397,27 +397,48 @@ document.addEventListener('DOMContentLoaded', function() {
                 return;
             }
             
-            try {
-                const response = await fetch('/api/questions', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
+            // Show token authorization modal before posting
+            if (typeof createTokenAuthModal === 'function') {
+                createTokenAuthModal(
+                    data.token_reward,
+                    async (transferResult) => {
+                        // Token transfer successful, now post the question
+                        try {
+                            const questionData = {
+                                ...data,
+                                transferHash: transferResult.hash
+                            };
+                            
+                            const response = await fetch('/api/questions', {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                },
+                                body: JSON.stringify(questionData)
+                            });
+                            
+                            const result = await response.json();
+                            
+                            if (result.success) {
+                                showMessage(result.message || 'Question posted successfully! Redirecting...', 'success');
+                                setTimeout(() => {
+                                    window.location.href = `/question/${result.questionId}`;
+                                }, 1000);
+                            } else {
+                                showMessage(result.error);
+                            }
+                        } catch (error) {
+                            showMessage('Failed to post question. Please try again.');
+                        }
                     },
-                    body: JSON.stringify(data)
-                });
-                
-                const result = await response.json();
-                
-                if (result.success) {
-                    showMessage(result.message || 'Question posted successfully! Redirecting...', 'success');
-                    setTimeout(() => {
-                        window.location.href = `/question/${result.questionId}`;
-                    }, 1000);
-                } else {
-                    showMessage(result.error);
-                }
-            } catch (error) {
-                showMessage('Failed to post question. Please try again.');
+                    () => {
+                        // User cancelled token authorization
+                        showMessage('Token authorization cancelled. Question not posted.');
+                    }
+                );
+            } else {
+                // Fallback to original behavior if tokenAuth.js not loaded
+                showMessage('Token authorization system not available. Please refresh the page.');
             }
         });
     }

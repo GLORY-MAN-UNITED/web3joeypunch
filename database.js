@@ -50,6 +50,8 @@ function initDatabase() {
                 deadline DATETIME,
                 reward_distributed INTEGER DEFAULT 0,
                 winning_answer_id INTEGER,
+                transfer_hash TEXT,
+                reward_transfer_hash TEXT,
                 FOREIGN KEY (user_id) REFERENCES users (id),
                 FOREIGN KEY (winning_answer_id) REFERENCES answers (id)
             )`, (err) => {
@@ -57,6 +59,22 @@ function initDatabase() {
                     console.error('Error creating questions table:', err);
                 } else {
                     console.log('Questions table created/verified');
+                    // Add transfer_hash column if it doesn't exist
+                    db.run(`ALTER TABLE questions ADD COLUMN transfer_hash TEXT`, (alterErr) => {
+                        if (alterErr && !alterErr.message.includes('duplicate column name')) {
+                            console.error('Error adding transfer_hash column:', alterErr);
+                        } else if (!alterErr) {
+                            console.log('Added transfer_hash column to questions table');
+                        }
+                    });
+                    // Add reward_transfer_hash column if it doesn't exist
+                    db.run(`ALTER TABLE questions ADD COLUMN reward_transfer_hash TEXT`, (alterErr) => {
+                        if (alterErr && !alterErr.message.includes('duplicate column name')) {
+                            console.error('Error adding reward_transfer_hash column:', alterErr);
+                        } else if (!alterErr) {
+                            console.log('Added reward_transfer_hash column to questions table');
+                        }
+                    });
                 }
             });
 
