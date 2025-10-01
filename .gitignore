@@ -1,7 +1,8 @@
 node_modules/
 
 *.sqlite
-node_modules/
 chunk_rag/api.txt
 chunk_rag/.env
 chunk_rag/data/
+
+**/__pycache__/
