@@ -25,6 +25,68 @@ function showMessage(message, type = 'error') {
     }
 }
 
+// MetaMask connection functions
+let currentAccount = null;
+
+// Check if MetaMask is installed
+function isMetaMaskInstalled() {
+    return typeof window.ethereum !== 'undefined';
+}
+
+// Connect to MetaMask
+async function connectMetaMask() {
+    if (!isMetaMaskInstalled()) {
+        showMessage('MetaMask is not installed. Please install MetaMask extension first.');
+        return null;
+    }
+
+    try {
+        // Request account access
+        const accounts = await window.ethereum.request({
+            method: 'eth_requestAccounts',
+        });
+
+        if (accounts.length > 0) {
+            currentAccount = accounts[0];
+            return currentAccount;
+        } else {
+            showMessage('No accounts found. Please make sure MetaMask is unlocked.');
+            return null;
+        }
+    } catch (error) {
+        console.error('Error connecting to MetaMask:', error);
+        if (error.code === 4001) {
+            showMessage('Please connect to MetaMask to continue.');
+        } else {
+            showMessage('Failed to connect to MetaMask. Please try again.');
+        }
+        return null;
+    }
+}
+
+// Get current connected account
+async function getCurrentAccount() {
+    if (!isMetaMaskInstalled()) {
+        return null;
+    }
+
+    try {
+        const accounts = await window.ethereum.request({
+            method: 'eth_accounts',
+        });
+        return accounts.length > 0 ? accounts[0] : null;
+    } catch (error) {
+        console.error('Error getting current account:', error);
+        return null;
+    }
+}
+
+// Format wallet address for display
+function formatAddress(address) {
+    if (!address) return '';
+    return `${address.substring(0, 6)}...${address.substring(address.length - 4)}`;
+}
+
 // Login form handler
 document.addEventListener('DOMContentLoaded', function() {
     const loginForm = document.getElementById('loginForm');
@@ -63,6 +125,32 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
     
+    // Connect wallet button handler
+    const connectWalletBtn = document.getElementById('connectWalletBtn');
+    if (connectWalletBtn) {
+        connectWalletBtn.addEventListener('click', async function() {
+            const walletAddress = await connectMetaMask();
+            if (walletAddress) {
+                updateWalletUI(walletAddress);
+                document.getElementById('walletAddressInput').value = walletAddress;
+                document.getElementById('registerBtn').disabled = false;
+                document.querySelector('.register-note').textContent = '✅ MetaMask connected! You can now register.';
+                document.querySelector('.register-note').style.color = 'green';
+            }
+        });
+
+        // Check if wallet is already connected
+        getCurrentAccount().then(account => {
+            if (account) {
+                updateWalletUI(account);
+                document.getElementById('walletAddressInput').value = account;
+                document.getElementById('registerBtn').disabled = false;
+                document.querySelector('.register-note').textContent = '✅ MetaMask connected! You can now register.';
+                document.querySelector('.register-note').style.color = 'green';
+            }
+        });
+    }
+
     // Register form handler
     const registerForm = document.getElementById('registerForm');
     if (registerForm) {
@@ -72,12 +160,18 @@ document.addEventListener('DOMContentLoaded', function() {
             const formData = new FormData(registerForm);
             const data = {
                 username: formData.get('username'),
-                password: formData.get('password')
+                password: formData.get('password'),
+                walletAddress: formData.get('walletAddress')
             };
             
             // Basic validation
             if (data.password.length < 6) {
                 showMessage('Password must be at least 6 characters long.');
+                return;
+            }
+
+            if (!data.walletAddress) {
+                showMessage('Please connect your MetaMask wallet first.');
                 return;
             }
             
@@ -93,15 +187,146 @@ document.addEventListener('DOMContentLoaded', function() {
                 const result = await response.json();
                 
                 if (result.success) {
-                    showMessage('Registration successful! Redirecting...', 'success');
+                    showMessage('Registration successful! Your wallet has been connected. Redirecting...', 'success');
                     setTimeout(() => {
                         window.location.href = '/';
-                    }, 1000);
+                    }, 1500);
                 } else {
                     showMessage(result.error);
                 }
             } catch (error) {
                 showMessage('Registration failed. Please try again.');
+            }
+        });
+    }
+
+    // Update wallet UI
+    function updateWalletUI(walletAddress) {
+        const walletInfo = document.getElementById('walletInfo');
+        const walletAddressElement = document.getElementById('walletAddress');
+        const connectWalletBtn = document.getElementById('connectWalletBtn');
+        const walletError = document.getElementById('walletError');
+
+        if (walletInfo && walletAddressElement && connectWalletBtn) {
+            walletInfo.style.display = 'block';
+            walletAddressElement.textContent = `Address: ${formatAddress(walletAddress)}`;
+            connectWalletBtn.style.display = 'none';
+            walletError.style.display = 'none';
+            currentAccount = walletAddress;
+        }
+    }
+
+    // Profile page wallet management
+    const updateWalletBtn = document.getElementById('updateWalletBtn');
+    const walletUpdateForm = document.getElementById('walletUpdateForm');
+    const connectNewWalletBtn = document.getElementById('connectNewWalletBtn');
+    const cancelUpdateBtn = document.getElementById('cancelUpdateBtn');
+    const confirmUpdateBtn = document.getElementById('confirmUpdateBtn');
+    const cancelConfirmBtn = document.getElementById('cancelConfirmBtn');
+    const newWalletAddressElement = document.getElementById('newWalletAddress');
+    
+    if (updateWalletBtn) {
+        updateWalletBtn.addEventListener('click', function() {
+            walletUpdateForm.style.display = 'block';
+            updateWalletBtn.style.display = 'none';
+        });
+    }
+
+    if (cancelUpdateBtn) {
+        cancelUpdateBtn.addEventListener('click', function() {
+            walletUpdateForm.style.display = 'none';
+            updateWalletBtn.style.display = 'inline-block';
+        });
+    }
+
+    if (connectNewWalletBtn) {
+        connectNewWalletBtn.addEventListener('click', async function() {
+            const walletAddress = await connectMetaMask();
+            if (walletAddress) {
+                const walletInfo = document.getElementById('walletInfo');
+                if (newWalletAddressElement && walletInfo) {
+                    newWalletAddressElement.textContent = `New Address: ${walletAddress}`;
+                    walletInfo.style.display = 'block';
+                    walletUpdateForm.style.display = 'none';
+                    currentAccount = walletAddress;
+                }
+            }
+        });
+    }
+
+    if (confirmUpdateBtn) {
+        confirmUpdateBtn.addEventListener('click', async function() {
+            if (!currentAccount) {
+                showMessage('No wallet connected. Please try again.');
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/user/wallet', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ walletAddress: currentAccount })
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    showMessage('Wallet updated successfully! Refreshing page...', 'success');
+                    setTimeout(() => {
+                        window.location.reload();
+                    }, 1500);
+                } else {
+                    showMessage(result.error);
+                }
+            } catch (error) {
+                showMessage('Failed to update wallet. Please try again.');
+            }
+        });
+    }
+
+    if (cancelConfirmBtn) {
+        cancelConfirmBtn.addEventListener('click', function() {
+            const walletInfo = document.getElementById('walletInfo');
+            if (walletInfo) {
+                walletInfo.style.display = 'none';
+            }
+            if (updateWalletBtn) {
+                updateWalletBtn.style.display = 'inline-block';
+            }
+            currentAccount = null;
+        });
+    }
+
+    // Profile page - connect wallet for users without wallet
+    const profileConnectWalletBtn = document.getElementById('connectWalletBtn');
+    if (profileConnectWalletBtn && !document.getElementById('registerForm')) {
+        profileConnectWalletBtn.addEventListener('click', async function() {
+            const walletAddress = await connectMetaMask();
+            if (walletAddress) {
+                try {
+                    const response = await fetch('/api/user/wallet', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ walletAddress: walletAddress })
+                    });
+
+                    const result = await response.json();
+
+                    if (result.success) {
+                        showMessage('Wallet connected successfully! Refreshing page...', 'success');
+                        setTimeout(() => {
+                            window.location.reload();
+                        }, 1500);
+                    } else {
+                        showMessage(result.error);
+                    }
+                } catch (error) {
+                    showMessage('Failed to connect wallet. Please try again.');
+                }
             }
         });
     }

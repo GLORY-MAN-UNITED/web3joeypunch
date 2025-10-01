@@ -14,6 +14,7 @@ function initDatabase() {
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 username TEXT UNIQUE NOT NULL,
                 password_hash TEXT NOT NULL,
+                wallet_address TEXT UNIQUE,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 tokens INTEGER DEFAULT 20
             )`, (err) => {
@@ -21,6 +22,19 @@ function initDatabase() {
                     console.error('Error creating users table:', err);
                 } else {
                     console.log('Users table created/verified');
+                    // Check if wallet_address column exists, add it if not
+                    db.run(`PRAGMA table_info(users)`, (err, rows) => {
+                        if (!err) {
+                            // Try to add wallet_address column if it doesn't exist
+                            db.run(`ALTER TABLE users ADD COLUMN wallet_address TEXT UNIQUE`, (alterErr) => {
+                                if (alterErr && !alterErr.message.includes('duplicate column name')) {
+                                    console.error('Error adding wallet_address column:', alterErr);
+                                } else if (!alterErr) {
+                                    console.log('Added wallet_address column to existing users table');
+                                }
+                            });
+                        }
+                    });
                 }
             });
 

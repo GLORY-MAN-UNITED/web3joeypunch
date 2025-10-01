@@ -54,13 +54,14 @@ app.get('/', (req, res) => {
         }
         
         if (req.session.userId) {
-            db.get('SELECT tokens FROM users WHERE id = ?', [req.session.userId], (err, user) => {
+            db.get('SELECT tokens, wallet_address FROM users WHERE id = ?', [req.session.userId], (err, user) => {
                 const userTokens = user ? user.tokens : 0;
-                const homePage = generateHomePage(questions, req.session.userId, req.session.username, userTokens);
+                const walletAddress = user ? user.wallet_address : null;
+                const homePage = generateHomePage(questions, req.session.userId, req.session.username, userTokens, walletAddress);
                 res.send(homePage);
             });
         } else {
-            const homePage = generateHomePage(questions, null, null, 0);
+            const homePage = generateHomePage(questions, null, null, 0, null);
             res.send(homePage);
         }
     });
@@ -82,11 +83,22 @@ app.get('/register', (req, res) => {
     res.send(generateRegisterPage());
 });
 
+// Profile page
+app.get('/profile', requireAuth, (req, res) => {
+    db.get('SELECT username, tokens, wallet_address, created_at FROM users WHERE id = ?', [req.session.userId], (err, user) => {
+        if (err || !user) {
+            return res.status(404).send('User not found');
+        }
+        res.send(generateProfilePage(user));
+    });
+});
+
 // Ask question page
 app.get('/ask', requireAuth, (req, res) => {
-    db.get('SELECT tokens FROM users WHERE id = ?', [req.session.userId], (err, user) => {
+    db.get('SELECT tokens, wallet_address FROM users WHERE id = ?', [req.session.userId], (err, user) => {
         const userTokens = user ? user.tokens : 0;
-        res.send(generateAskPage(req.session.username, userTokens));
+        const walletAddress = user ? user.wallet_address : null;
+        res.send(generateAskPage(req.session.username, userTokens, walletAddress));
     });
 });
 
@@ -128,13 +140,14 @@ app.get('/question/:id', (req, res) => {
             }
             
             if (req.session.userId) {
-                db.get('SELECT tokens FROM users WHERE id = ?', [req.session.userId], (err, user) => {
+                db.get('SELECT tokens, wallet_address FROM users WHERE id = ?', [req.session.userId], (err, user) => {
                     const userTokens = user ? user.tokens : 0;
-                    const questionPage = generateQuestionPage(question, answers, req.session.userId, req.session.username, userTokens);
+                    const walletAddress = user ? user.wallet_address : null;
+                    const questionPage = generateQuestionPage(question, answers, req.session.userId, req.session.username, userTokens, walletAddress);
                     res.send(questionPage);
                 });
             } else {
-                const questionPage = generateQuestionPage(question, answers, null, null, 0);
+                const questionPage = generateQuestionPage(question, answers, null, null, 0, null);
                 res.send(questionPage);
             }
         });
@@ -145,29 +158,49 @@ app.get('/question/:id', (req, res) => {
 
 // Register user
 app.post('/api/register', async (req, res) => {
-    const { username, password } = req.body;
+    const { username, password, walletAddress } = req.body;
     
     if (!username || !password) {
         return res.status(400).json({ error: 'Username and password are required' });
     }
     
+    if (!walletAddress) {
+        return res.status(400).json({ error: 'Wallet address is required. Please connect your MetaMask wallet.' });
+    }
+    
+    // Validate Ethereum address format
+    const ethAddressRegex = /^0x[a-fA-F0-9]{40}$/;
+    if (!ethAddressRegex.test(walletAddress)) {
+        return res.status(400).json({ error: 'Invalid wallet address format' });
+    }
+    
     try {
         const hashedPassword = await bcrypt.hash(password, 10);
         
-        db.run('INSERT INTO users (username, password_hash) VALUES (?, ?)',
-            [username, hashedPassword], function(err) {
+        db.run('INSERT INTO users (username, password_hash, wallet_address) VALUES (?, ?, ?)',
+            [username, hashedPassword, walletAddress.toLowerCase()], function(err) {
                 if (err) {
                     if (err.message.includes('UNIQUE constraint failed')) {
-                        return res.status(400).json({ error: 'Username already exists' });
+                        if (err.message.includes('username')) {
+                            return res.status(400).json({ error: 'Username already exists' });
+                        } else if (err.message.includes('wallet_address')) {
+                            return res.status(400).json({ error: 'This wallet address is already registered' });
+                        }
                     }
                     return res.status(500).json({ error: 'Registration failed' });
                 }
                 
                 req.session.userId = this.lastID;
                 req.session.username = username;
-                res.json({ success: true, message: 'Registration successful' });
+                req.session.walletAddress = walletAddress.toLowerCase();
+                res.json({ 
+                    success: true, 
+                    message: 'Registration successful! Your wallet has been connected.',
+                    walletAddress: walletAddress.toLowerCase()
+                });
             });
     } catch (error) {
+        console.error('Registration error:', error);
         res.status(500).json({ error: 'Registration failed' });
     }
 });
@@ -194,7 +227,12 @@ app.post('/api/login', (req, res) => {
             if (isValid) {
                 req.session.userId = user.id;
                 req.session.username = user.username;
-                res.json({ success: true, message: 'Login successful' });
+                req.session.walletAddress = user.wallet_address;
+                res.json({ 
+                    success: true, 
+                    message: 'Login successful',
+                    hasWallet: !!user.wallet_address
+                });
             } else {
                 res.status(400).json({ error: 'Invalid username or password' });
             }
@@ -208,6 +246,57 @@ app.post('/api/login', (req, res) => {
 app.post('/api/logout', (req, res) => {
     req.session.destroy();
     res.json({ success: true, message: 'Logged out successfully' });
+});
+
+// Get user wallet info
+app.get('/api/user/wallet', requireAuth, (req, res) => {
+    db.get('SELECT wallet_address FROM users WHERE id = ?', [req.session.userId], (err, user) => {
+        if (err) {
+            return res.status(500).json({ error: 'Database error' });
+        }
+        
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        
+        res.json({ 
+            success: true, 
+            walletAddress: user.wallet_address,
+            hasWallet: !!user.wallet_address
+        });
+    });
+});
+
+// Update user wallet address
+app.post('/api/user/wallet', requireAuth, (req, res) => {
+    const { walletAddress } = req.body;
+    
+    if (!walletAddress) {
+        return res.status(400).json({ error: 'Wallet address is required' });
+    }
+    
+    // Validate Ethereum address format
+    const ethAddressRegex = /^0x[a-fA-F0-9]{40}$/;
+    if (!ethAddressRegex.test(walletAddress)) {
+        return res.status(400).json({ error: 'Invalid wallet address format' });
+    }
+    
+    db.run('UPDATE users SET wallet_address = ? WHERE id = ?', 
+        [walletAddress.toLowerCase(), req.session.userId], function(err) {
+            if (err) {
+                if (err.message.includes('UNIQUE constraint failed')) {
+                    return res.status(400).json({ error: 'This wallet address is already registered to another user' });
+                }
+                return res.status(500).json({ error: 'Failed to update wallet address' });
+            }
+            
+            req.session.walletAddress = walletAddress.toLowerCase();
+            res.json({ 
+                success: true, 
+                message: 'Wallet address updated successfully',
+                walletAddress: walletAddress.toLowerCase()
+            });
+        });
 });
 
 // Ask a question
@@ -415,10 +504,20 @@ app.post('/api/endorse/answer', requireAuth, (req, res) => {
 });
 
 // HTML Template Functions
-function generateBasePage(title, content, username = null, userTokens = 0) {
+function generateBasePage(title, content, username = null, userTokens = 0, walletAddress = null) {
+    const walletInfo = walletAddress ? 
+        `<div class="nav-wallet-info">
+            <span>🦊</span>
+            <span class="nav-wallet-address">${walletAddress.substring(0, 6)}...${walletAddress.substring(walletAddress.length - 4)}</span>
+         </div>` : '';
+    
     const authSection = username ? 
-        `<span class="user-info">Welcome, ${username} | Tokens: ${userTokens}</span>
-         <button onclick="logout()" class="btn btn-secondary">Logout</button>` :
+        `<div style="display: flex; align-items: center; gap: 1rem;">
+            <span class="user-info">Welcome, ${username} | Tokens: ${userTokens}</span>
+            ${walletInfo}
+            <a href="/profile" class="btn btn-secondary">Profile</a>
+            <button onclick="logout()" class="btn btn-secondary">Logout</button>
+         </div>` :
         `<a href="/login" class="btn btn-secondary">Login</a>
          <a href="/register" class="btn btn-primary">Register</a>`;
 
@@ -445,7 +544,7 @@ function generateBasePage(title, content, username = null, userTokens = 0) {
 </html>`;
 }
 
-function generateHomePage(questions, userId, username, userTokens = 0) {
+function generateHomePage(questions, userId, username, userTokens = 0, walletAddress = null) {
     const questionsHtml = questions.map(q => {
         const now = new Date();
         const deadline = new Date(q.deadline);
@@ -494,7 +593,7 @@ function generateHomePage(questions, userId, username, userTokens = 0) {
         </div>
     `;
 
-    return generateBasePage('Home', content, username, userTokens);
+    return generateBasePage('Home', content, username, userTokens, walletAddress);
 }
 
 function generateLoginPage() {
@@ -523,6 +622,16 @@ function generateRegisterPage() {
     const content = `
         <div class="auth-container">
             <h2>Register</h2>
+            <div class="wallet-section">
+                <h3>🦊 Connect MetaMask Wallet</h3>
+                <p>Connect your MetaMask wallet to enable token transfers and rewards.</p>
+                <button type="button" id="connectWalletBtn" class="btn btn-secondary">Connect MetaMask</button>
+                <div id="walletInfo" class="wallet-info" style="display: none;">
+                    <p>✅ Wallet Connected</p>
+                    <p id="walletAddress"></p>
+                </div>
+                <div id="walletError" class="wallet-error" style="display: none; color: red;"></div>
+            </div>
             <form id="registerForm" class="auth-form">
                 <div class="form-group">
                     <label for="username">Username:</label>
@@ -532,7 +641,9 @@ function generateRegisterPage() {
                     <label for="password">Password:</label>
                     <input type="password" id="password" name="password" required>
                 </div>
-                <button type="submit" class="btn btn-primary">Register</button>
+                <input type="hidden" id="walletAddressInput" name="walletAddress">
+                <button type="submit" class="btn btn-primary" id="registerBtn" disabled>Register</button>
+                <p class="register-note">⚠️ Please connect your MetaMask wallet before registering.</p>
             </form>
             <p>Already have an account? <a href="/login">Login here</a></p>
         </div>
@@ -541,7 +652,7 @@ function generateRegisterPage() {
     return generateBasePage('Register', content);
 }
 
-function generateAskPage(username, userTokens = 0) {
+function generateAskPage(username, userTokens = 0, walletAddress = null) {
     const content = `
         <div class="ask-container">
             <h2>Ask a Question</h2>
@@ -595,10 +706,10 @@ function generateAskPage(username, userTokens = 0) {
         </div>
     `;
 
-    return generateBasePage('Ask Question', content, username, userTokens);
+    return generateBasePage('Ask Question', content, username, userTokens, walletAddress);
 }
 
-function generateQuestionPage(question, answers, userId, username, userTokens = 0) {
+function generateQuestionPage(question, answers, userId, username, userTokens = 0, walletAddress = null) {
     const now = new Date();
     const deadline = new Date(question.deadline);
     const isExpired = deadline <= now;
@@ -683,7 +794,69 @@ function generateQuestionPage(question, answers, userId, username, userTokens = 
         ` : isExpired ? '<div class="expired-notice"><p>⏰ This question has expired. No new answers can be posted.</p></div>' : '<p><a href="/login">Login</a> to post an answer.</p>'}
     `;
 
-    return generateBasePage(question.title, content, username, userTokens);
+    return generateBasePage(question.title, content, username, userTokens, walletAddress);
+}
+
+function generateProfilePage(user) {
+    const content = `
+        <div class="profile-container">
+            <h2>👤 User Profile</h2>
+            <div class="profile-card">
+                <div class="profile-info">
+                    <h3>Account Information</h3>
+                    <div class="info-row">
+                        <span class="label">Username:</span>
+                        <span class="value">${user.username}</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="label">Tokens:</span>
+                        <span class="value token-amount">💰 ${user.tokens}</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="label">Member since:</span>
+                        <span class="value">${new Date(user.created_at).toLocaleDateString()}</span>
+                    </div>
+                </div>
+                
+                <div class="wallet-management">
+                    <h3>🦊 Wallet Management</h3>
+                    ${user.wallet_address ? `
+                        <div class="current-wallet">
+                            <div class="wallet-connected">
+                                <div class="connection-status">
+                                    <div class="status-indicator"></div>
+                                    <span>Wallet Connected</span>
+                                </div>
+                                <div class="wallet-address">${user.wallet_address}</div>
+                                <button type="button" id="updateWalletBtn" class="btn btn-secondary">Update Wallet</button>
+                            </div>
+                        </div>
+                    ` : `
+                        <div class="no-wallet">
+                            <p>⚠️ No wallet connected. Connect your MetaMask wallet to enable token transfers.</p>
+                            <button type="button" id="connectWalletBtn" class="btn btn-primary">Connect MetaMask</button>
+                        </div>
+                    `}
+                    
+                    <div id="walletUpdateForm" class="wallet-update-form" style="display: none;">
+                        <h4>Connect New Wallet</h4>
+                        <p>Click the button below to connect a different MetaMask wallet.</p>
+                        <button type="button" id="connectNewWalletBtn" class="btn btn-primary">Connect New Wallet</button>
+                        <button type="button" id="cancelUpdateBtn" class="btn btn-secondary">Cancel</button>
+                    </div>
+                    
+                    <div id="walletInfo" class="wallet-info" style="display: none;">
+                        <p>✅ New Wallet Connected</p>
+                        <p id="newWalletAddress"></p>
+                        <button type="button" id="confirmUpdateBtn" class="btn btn-primary">Confirm Update</button>
+                        <button type="button" id="cancelConfirmBtn" class="btn btn-secondary">Cancel</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+
+    return generateBasePage('Profile', content, user.username, user.tokens, user.wallet_address);
 }
 
 // Function to check and distribute rewards for expired questions
