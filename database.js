@@ -15,8 +15,7 @@ function initDatabase() {
                 username TEXT UNIQUE NOT NULL,
                 password_hash TEXT NOT NULL,
                 wallet_address TEXT UNIQUE,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                tokens INTEGER DEFAULT 20
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )`, (err) => {
                 if (err) {
                     console.error('Error creating users table:', err);
