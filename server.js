@@ -2,6 +2,7 @@ const express = require('express');
 const session = require('express-session');
 const bcrypt = require('bcryptjs');
 const path = require('path');
+const { spawn } = require('child_process');
 const { db, initDatabase } = require('./database');
 const cors = require('cors');
 const app = express();
@@ -10,6 +11,207 @@ const { getTokenBalance } = require('./balance');  // 引入区块链余额查�
 app.use(cors());
 
 const PORT = process.env.PORT || 3000;
+
+// Cache resolved paths for the local RAG helper so we avoid recomputing them.
+const RAG_SCRIPT_PATH = path.join(__dirname, 'chunk_rag', 'answer.py');
+const ADD_FILE_SCRIPT_PATH = path.join(__dirname, 'chunk_rag', 'add_file.py');
+const RAG_DATA_DIR = path.join(__dirname, 'chunk_rag', 'data');
+
+function escapeHtml(value) {
+    if (!value) {
+        return '';
+    }
+    return value.replace(/[&<>"']/g, (char) => {
+        switch (char) {
+            case '&':
+                return '&amp;';
+            case '<':
+                return '&lt;';
+            case '>':
+                return '&gt;';
+            case '"':
+                return '&quot;';
+            case "'":
+                return '&#39;';
+            default:
+                return char;
+        }
+    });
+}
+
+function renderBasicMarkdown(value) {
+    if (!value) {
+        return '';
+    }
+    const escaped = escapeHtml(value);
+    const lines = escaped.split(/\r?\n/).map((line) => {
+        const trimmed = line.trim();
+        if (trimmed.startsWith('### ')) {
+            return `<h3>${trimmed.slice(4).trim()}</h3>`;
+        }
+        return trimmed;
+    });
+    const withHeadings = lines.join('\n');
+    const withBold = withHeadings.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    return withBold
+        .replace(/\n{2,}/g, '<br><br>')
+        .replace(/\n/g, '<br>');
+}
+
+async function generateAIAnswer(questionText) {
+    const cleanedQuestion = (questionText || '').trim();
+    if (!cleanedQuestion) {
+        return null;
+    }
+
+    const pythonExecutable = process.env.PYTHON || process.env.PYTHON_PATH || 'python3';
+
+    return new Promise((resolve) => {
+        const subprocess = spawn(
+            pythonExecutable,
+            [RAG_SCRIPT_PATH, cleanedQuestion, '--data-dir', RAG_DATA_DIR],
+            {
+                env: process.env,
+            }
+        );
+
+        let output = '';
+        let errorOutput = '';
+
+        subprocess.stdout.on('data', (data) => {
+            output += data.toString();
+        });
+
+        subprocess.stderr.on('data', (data) => {
+            errorOutput += data.toString();
+        });
+
+        subprocess.on('error', (error) => {
+            console.error('Failed to start RAG subprocess:', error);
+            resolve(null);
+        });
+
+        subprocess.on('close', (code) => {
+            if (code === 0 && output.trim()) {
+                resolve(output.trim());
+            } else {
+                if (errorOutput) {
+                    console.error('RAG subprocess error:', errorOutput.trim());
+                }
+                resolve(null);
+            }
+        });
+    });
+}
+
+async function addQAPairToRag(questionText, answerText) {
+    const cleanedQuestion = (questionText || '').trim();
+    const cleanedAnswer = (answerText || '').trim();
+    if (!cleanedQuestion || !cleanedAnswer) {
+        return false;
+    }
+
+    const pythonExecutable = process.env.PYTHON || process.env.PYTHON_PATH || 'python3';
+
+    return new Promise((resolve) => {
+        const subprocess = spawn(
+            pythonExecutable,
+            [ADD_FILE_SCRIPT_PATH, cleanedQuestion, cleanedAnswer, '--data-dir', RAG_DATA_DIR],
+            {
+                env: process.env,
+            }
+        );
+
+        let errorOutput = '';
+
+        subprocess.stderr.on('data', (data) => {
+            errorOutput += data.toString();
+        });
+
+        subprocess.on('error', (error) => {
+            console.error('Failed to start add_file subprocess:', error);
+            resolve(false);
+        });
+
+        subprocess.on('close', (code) => {
+            if (code === 0) {
+                console.log('Stored QA pair in RAG for question snippet:', cleanedQuestion.slice(0, 80));
+                resolve(true);
+            } else {
+                if (errorOutput) {
+                    console.error('add_file subprocess error:', errorOutput.trim());
+                }
+                resolve(false);
+            }
+        });
+    });
+}
+
+function buildRagQuestionText(question) {
+    const parts = [question.title, question.content].filter(part => part && part.toString().trim());
+    return parts.join('\n\n').trim();
+}
+
+async function ensureAiAnswerForQuestion(question) {
+    if (question.ai_answer && question.ai_answer.toString().trim()) {
+        return question.ai_answer;
+    }
+
+    const ragPromptParts = [question.title || '', question.content || ''].filter(Boolean);
+    const ragPrompt = ragPromptParts.join('\n\n').slice(0, 2000);
+    try {
+        const aiAnswer = await generateAIAnswer(ragPrompt);
+        if (!aiAnswer) {
+            return null;
+        }
+        await new Promise((resolve) => {
+            db.run(
+                'UPDATE questions SET ai_answer = ?, ai_answer_updated_at = ? WHERE id = ?',
+                [aiAnswer, new Date().toISOString(), question.id],
+                (updateErr) => {
+                    if (updateErr) {
+                        console.error('Failed to persist AI answer during expiration:', updateErr);
+                    } else {
+                        question.ai_answer = aiAnswer;
+                    }
+                    resolve();
+                }
+            );
+        });
+        return aiAnswer;
+    } catch (error) {
+        console.error('Failed to generate AI answer for expired question:', error);
+        return null;
+    }
+}
+
+async function persistQuestionToRag(question, winningAnswer) {
+    try {
+        const questionText = buildRagQuestionText(question);
+        if (!questionText) {
+            return;
+        }
+
+        const hasStrongHumanAnswer = winningAnswer && Number(winningAnswer.influence_points || 0) > 0 && winningAnswer.content;
+        if (hasStrongHumanAnswer) {
+            const stored = await addQAPairToRag(questionText, winningAnswer.content);
+            if (stored) {
+                return;
+            }
+            console.warn('Failed to store human answer in RAG for question', question.id, '- falling back to AI answer');
+        }
+
+        const aiAnswer = await ensureAiAnswerForQuestion(question);
+        if (aiAnswer) {
+            const stored = await addQAPairToRag(questionText, aiAnswer);
+            if (!stored) {
+                console.warn('Failed to store AI answer in RAG for question', question.id);
+            }
+        }
+    } catch (error) {
+        console.error('Failed to persist QA pair to RAG:', error);
+    }
+}
 
 // Middleware
 app.use(express.json());
@@ -147,18 +349,41 @@ app.get('/question/:id', async (req, res) => {  // 增加 async 关键字
                 console.error(err);
                 return res.status(500).send('Database error');
             }
-            
+
+            let aiAnswer = question.ai_answer || null;
+            if (!aiAnswer) {
+                try {
+                    const ragPromptParts = [question.title || '', question.content || ''].filter(Boolean);
+                    const ragPrompt = ragPromptParts.join('\n\n').slice(0, 2000);
+                    aiAnswer = await generateAIAnswer(ragPrompt);
+                    if (aiAnswer) {
+                        db.run(
+                            'UPDATE questions SET ai_answer = ?, ai_answer_updated_at = ? WHERE id = ?',
+                            [aiAnswer, new Date().toISOString(), questionId],
+                            (updateErr) => {
+                                if (updateErr) {
+                                    console.error('Failed to persist AI answer:', updateErr);
+                                }
+                            }
+                        );
+                        question.ai_answer = aiAnswer;
+                    }
+                } catch (ragError) {
+                    console.error('Failed to generate AI answer:', ragError);
+                }
+            }
+
             if (req.session.userId) {
                 // 从数据库查询当前用户的 wallet_address
                 db.get('SELECT wallet_address FROM users WHERE id = ?', [req.session.userId], async (err, user) => {
                     // 调用区块链查询余额
                     const userTokens = user?.wallet_address ? await getTokenBalance(user.wallet_address) : 0;
                     const walletAddress = user ? user.wallet_address : null;
-                    const questionPage = generateQuestionPage(question, answers, req.session.userId, req.session.username, userTokens, walletAddress);
+                    const questionPage = generateQuestionPage(question, answers, req.session.userId, req.session.username, userTokens, walletAddress, aiAnswer);
                     res.send(questionPage);
                 });
             } else {
-                const questionPage = generateQuestionPage(question, answers, null, null, 0, null);
+                const questionPage = generateQuestionPage(question, answers, null, null, 0, null, aiAnswer);
                 res.send(questionPage);
             }
         });
@@ -720,12 +945,34 @@ function generateAskPage(username, userTokens = 0, walletAddress = null) {
     return generateBasePage('Ask Question', content, username, userTokens, walletAddress);
 }
 
-function generateQuestionPage(question, answers, userId, username, userTokens = 0, walletAddress = null) {
+function generateQuestionPage(question, answers, userId, username, userTokens = 0, walletAddress = null, aiAnswer = null) {
     const now = new Date();
     const deadline = new Date(question.deadline);
     const isExpired = deadline <= now;
     const timeLeft = isExpired ? 0 : Math.max(0, Math.ceil((deadline - now) / 60000)); // minutes left
-    
+
+    const aiAnswerHtml = aiAnswer ? (() => {
+        const aiAnswerContent = renderBasicMarkdown(aiAnswer);
+        const isLong = aiAnswer.length > 600;
+        const collapseClass = isLong ? ' collapsed' : '';
+        const toggleButton = isLong ? '<button class="ai-toggle" data-target="ai-answer-body">Expand Oracle Insight</button>' : '';
+        return `
+        <div class="ai-answer-card${collapseClass}">
+            <div class="ai-answer-header">
+                <span class="ai-avatar">🤖</span>
+                <div>
+                    <h3>JoeyPouch Oracle</h3>
+                    <p class="ai-subtitle">Autonomous insight crafted by our RAG system</p>
+                </div>
+                ${toggleButton}
+            </div>
+            <div class="ai-answer-body" id="ai-answer-body">
+                <p>${aiAnswerContent}</p>
+            </div>
+        </div>
+        `;
+    })() : '';
+
     const answersHtml = answers.map(a => {
         const isWinning = question.winning_answer_id === a.id;
         return `
@@ -786,6 +1033,7 @@ function generateQuestionPage(question, answers, userId, username, userTokens = 
 
         <div class="answers-section">
             <h3>${answers.length} Answer${answers.length !== 1 ? 's' : ''}</h3>
+            ${aiAnswerHtml}
             <div class="answers-list">
                 ${answersHtml}
             </div>
@@ -875,7 +1123,7 @@ function checkExpiredQuestions() {
     const now = new Date().toISOString();
     
     db.all(`
-        SELECT id, token_reward, user_id 
+        SELECT id, token_reward, user_id, title, content, ai_answer 
         FROM questions 
         WHERE deadline <= ? AND reward_distributed = 0
     `, [now], (err, expiredQuestions) => {
@@ -887,7 +1135,7 @@ function checkExpiredQuestions() {
         expiredQuestions.forEach(question => {
             // Find the answer with highest influence points for this question
             db.get(`
-                SELECT a.id, a.user_id, a.influence_points, u.username
+                SELECT a.id, a.user_id, a.influence_points, a.content, u.username
                 FROM answers a
                 JOIN users u ON a.user_id = u.id
                 WHERE a.question_id = ?
@@ -898,7 +1146,7 @@ function checkExpiredQuestions() {
                     console.error('Error finding winning answer:', err);
                     return;
                 }
-                
+
                 if (winningAnswer) {
                     // Award tokens to the winning answer's author
                     db.run(`
@@ -910,7 +1158,7 @@ function checkExpiredQuestions() {
                             console.error('Error awarding tokens:', err);
                             return;
                         }
-                        
+
                         // Mark question as reward distributed and record winning answer
                         db.run(`
                             UPDATE questions 
@@ -921,6 +1169,9 @@ function checkExpiredQuestions() {
                                 console.error('Error updating question reward status:', err);
                             } else {
                                 console.log(`Awarded ${question.token_reward} tokens to user ${winningAnswer.user_id} for winning answer to question ${question.id}`);
+                                persistQuestionToRag(question, winningAnswer).catch((ragError) => {
+                                    console.error('Failed to persist winning answer to RAG:', ragError);
+                                });
                             }
                         });
                     });
@@ -935,6 +1186,9 @@ function checkExpiredQuestions() {
                             console.error('Error marking question as expired:', err);
                         } else {
                             console.log(`Question ${question.id} expired with no answers - no reward distributed`);
+                            persistQuestionToRag(question, null).catch((ragError) => {
+                                console.error('Failed to persist AI answer to RAG:', ragError);
+                            });
                         }
                     });
                 }

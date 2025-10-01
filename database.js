@@ -51,6 +51,8 @@ function initDatabase() {
                 deadline DATETIME,
                 reward_distributed INTEGER DEFAULT 0,
                 winning_answer_id INTEGER,
+                ai_answer TEXT,
+                ai_answer_updated_at DATETIME,
                 FOREIGN KEY (user_id) REFERENCES users (id),
                 FOREIGN KEY (winning_answer_id) REFERENCES answers (id)
             )`, (err) => {
@@ -58,6 +60,16 @@ function initDatabase() {
                     console.error('Error creating questions table:', err);
                 } else {
                     console.log('Questions table created/verified');
+                    db.run(`ALTER TABLE questions ADD COLUMN ai_answer TEXT`, (alterErr) => {
+                        if (alterErr && !alterErr.message.includes('duplicate column name')) {
+                            console.error('Error adding ai_answer column:', alterErr);
+                        }
+                    });
+                    db.run(`ALTER TABLE questions ADD COLUMN ai_answer_updated_at DATETIME`, (alterErr) => {
+                        if (alterErr && !alterErr.message.includes('duplicate column name')) {
+                            console.error('Error adding ai_answer_updated_at column:', alterErr);
+                        }
+                    });
                 }
             });
 

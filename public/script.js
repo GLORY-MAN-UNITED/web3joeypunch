@@ -415,7 +415,7 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
     }
-    
+
     // Answer form handler
     const answerForm = document.getElementById('answerForm');
     if (answerForm) {
@@ -457,6 +457,26 @@ document.addEventListener('DOMContentLoaded', function() {
                 showMessage('Failed to post answer. Please try again.');
             }
         });
+    }
+});
+
+document.addEventListener('click', (event) => {
+    const toggleButton = event.target.closest('.ai-toggle');
+    if (!toggleButton) {
+        return;
+    }
+    const card = toggleButton.closest('.ai-answer-card');
+    if (!card) {
+        return;
+    }
+    if (card.classList.contains('collapsed')) {
+        card.classList.remove('collapsed');
+        card.classList.add('expanded');
+        toggleButton.textContent = 'Collapse Oracle Insight';
+    } else {
+        card.classList.remove('expanded');
+        card.classList.add('collapsed');
+        toggleButton.textContent = 'Expand Oracle Insight';
     }
 });
 
